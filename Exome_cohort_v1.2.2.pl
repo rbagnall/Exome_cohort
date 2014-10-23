@@ -2,7 +2,7 @@
 
 #This script aligns a cohort of paired end NGS data to the illumina TruSeq or Nextera Exome or sureselect_EZ_Exome_v4 + UTR (+50 nucleotides of padding either side of exome intervals)
 #written by richard bagnall (r.bagnall@centenary.org.au)
-#Usage: Exome_cohort_v1.1.pl -fastq [path/2/user] -cohort [cohort_name] -exome [truseq or sureselectv4]
+#Usage: Exome_cohort_v.pl -fastq [path/2/user] -cohort [cohort_name] -exome [truseq or sureselectv4]
 #save raw reads as [name1].1.fastq.gz, [name1].2.fastq.gz , [name2].1.fastq.gz , [name2].2.fastq.gz, etc...
 #save the raw reads in a directory called Rawdata e.g. /home/shared/NGS/human/[USER]/Rawdata
 
@@ -69,17 +69,12 @@ print "\t\t-------------------------------------------------------------\n\n";
 print "\n";
 
 # create temporary folders
-mkdir ("$input/tempSAMs") or die "Unable to create tempSAMs directory: <$!>\n";
 mkdir ("$input/tempBAMs") or die "Unable to create tempBAMs directory: <$!>\n";
 mkdir ("$input/tempVCFs") or die "Unable to create tempVCFs directory: <$!>\n";
-mkdir ("$input/tempLOGs") or die "Unable to create tempLOGs directory: <$!>\n";
-
 
 # paths
 my $path2rawdata = "$input/Rawdata";
-my $path2sam = "$input/tempSAMs";
 my $path2bam = "$input/tempBAMs";
-my $path2log = "$input/tempLOGs";
 my $path2vcf = "$input/tempVCFs";
 my $path2gatk = '/home/groups/cardio/Applications/GenomeAnalysisTK-3.1-1/GenomeAnalysisTK.jar';
 my $path2indel1kg = '/home/groups/cardio/References/INDELS/1000G_phase1.indels.b37.vcf';
@@ -102,7 +97,6 @@ my @fq = glob("$path2rawdata/*.fastq.gz"); # make array of fastq.gz
 my @f_fq = grep(/1.fastq.gz$/i, @fq);
 my @r_fq = grep( /2.fastq.gz$/i, @fq );
 if (scalar(@f_fq) != scalar(@r_fq)) {
-    rmdir "$path2sam";
     rmdir "$path2bam";
     rmdir "$path2vcf";
     die "*** error: There must be a 1.fastq.gz and 2.fastq.gz file for each sample\n\n";
@@ -122,33 +116,11 @@ $eightfork_manager-> wait_all_children;
 print "\n\n*** BWA mapping complete ***\n";
 clock();
 
-rmdir "$path2sam"; # remove tempSAMs directory
-
-exit;
-
-############################
-#   Remove Duplicates      #
-############################
-
-#~#my $fourfork_manager = Parallel::ForkManager->new(4);
-
-#~#my @sortedbamfiles = glob("$path2bam/*sorted.bam"); #make array of sorted.bam files
-#~#for (my $i = 0; $i < @sortedbamfiles; $i++) {
-#~#    $fourfork_manager->start and next;
-#~#    mark_dups($sortedbamfiles[$i]); # loop throught and pass to picard mark_dups subroutine
-#~#    $fourfork_manager->finish;
-#~#}
-
-#~#$fourfork_manager-> wait_all_children;
-
-#~#print "\n\n*** Removing duplicates complete ***\n";
-#~#clock();
-
 #######################
 #  Realign Bamfile    #
 #######################
 
-my $sixfork_manager = Parallel::ForkManager->new(6);
+my $sixfork_manager = Parallel::ForkManager->new(2);
 
 my @sort_ddbamfiles = glob("$path2bam/*.sorted.bam"); #make array of dedupped.sorted.bam files
 for (my $i = 0; $i < @sort_ddbamfiles; $i++) {
@@ -170,13 +142,11 @@ for (my $i = 0; $i < @indel_intervals; $i++) { unlink ("$indel_intervals[$i]") }
 print "\n\n*** GATK indel realigner complete ***\n";
 clock();
 
-exit;
-
 #####################################
 # base quality score recalibration  #
 #####################################
 
-my $fstsixfork_manager = Parallel::ForkManager->new(6);
+my $fstsixfork_manager = Parallel::ForkManager->new(2);
 
 my @realigned = glob("$path2bam/*realigned.bam"); #make array of .realigned.bam files
 for (my $i = 0; $i < @realigned; $i++) { # loop through array of bamfiles
@@ -197,13 +167,12 @@ clock();
 # Depth of coverage calculation #
 #################################
 
-my $sndsixfork_manager = Parallel::ForkManager->new(6);
+my $sndsixfork_manager = Parallel::ForkManager->new(2);
 
 my @recalibrated = glob("$path2bam/*recalibrated.bam"); #make array of .recalibrated.bam files
 for (my $i = 0; $i < @recalibrated; $i++) { # loop through array of bamfiles
     $sndsixfork_manager->start and next;
 	coverage($recalibrated[$i]); # pass to coverage sub
-    #@#    reduce_reads($recalibrated[$i]);
     $sndsixfork_manager->finish;
 }
 
@@ -228,15 +197,6 @@ yn();
 my @recalibrated_bam_files = glob("$path2bam/*recalibrated.bam"); # make array of recalibrated bam files
 my $recalibrated_joined = join(" -I ",@recalibrated_bam_files); # $input/tempBAMs/sample1.reduced.bam -I $input/tempBAMs/sample2.reduced.bam
 unified_genotyper($recalibrated_joined);
-
-####################
-# Haplotype Caller #
-####################
-
-# make a string of the recalibrated.bam files, separated by -I
-#@#my @recalibrated_bam_files = glob("$path2bam/*recalibrated.bam"); # make array of recalibrated bam files
-#@#my $recalibrated_joined = join(" -I ",@recalibrated_bam_files); # $input/tempBAMs/sample1.recalibrated.bam -I $input/tempBAMs/sample2.recalibrated.bam
-#@#haplotype_caller($recalibrated_joined);
 
 ###################
 # Select Variants #
@@ -283,14 +243,6 @@ unlink ($raw_snps_vcf[$i]); # cleanup: Delete unfiltered snp and index files
 unlink ("$raw_snps_vcf[$i].idx");
 }
 
-########################
-# VQSR SNPs and INDELS #
-########################
-
-#@#my @raw1_vcf = glob("$path2vcf/*raw.vcf"); # make array of raw vcf files (even though there is only 1 file)
-#@#vqsr($raw1_vcf[0]);
-
-
 #############################
 #   Move files and cleanup  #
 #############################
@@ -299,8 +251,6 @@ print "\n\n*** Renaming files and folders ***\n";
 clock();
 
 cleanup();
-
-
 
 #################################
 #   Begin Annotation of snps    #
@@ -1186,17 +1136,13 @@ sub bwa_mem {
 	my @read_pair = split(" ", $current_read_pair);
 	my $current_samplename = substr $read_pair[0], ($offset + 9), -11; # i.e. get IO2 from $input/Rawdata/IO2.f.fastq.gz
 	my $RG ='@RG'; #need this to be able to print out @RG
-	print "\n\n*** Aligning $current_samplename reads ***\n";
+
+    print "\n\n*** Aligning $current_samplename reads ***\n";
 	clock();
     
         my $bwa_mem = system("bwa mem -PM -t 6 -R '$RG\tID:$current_samplename\tSM:$current_samplename\tPL:ILLUMINA' $path2ref $current_read_pair | samtools view -Su - | novosort - --threads 6 --removeDuplicates --ram 10G --output $path2bam/$current_samplename.badheader.bam");
     
         my $reheader = system("samtools view -H $path2bam/$current_samplename.badheader.bam | sed -e 's/CL:bwa.*//' | samtools reheader - $path2bam/$current_samplename.badheader.bam > $path2bam/$current_samplename.sorted.bam");
-    #	my $bwa_mem = system("bwa mem -PM -t 2 -R '$RG\tID:$current_samplename\tSM:$current_samplename\tPL:ILLUMINA' $path2ref $current_read_pair > $path2sam/$current_samplename.sam");
-    #	print "\n\n*** Converting $current_samplename bam to sam ***\n";
-    #	clock();
-    #	my $sam2bam = system("samtools view -bS -o $path2bam/$current_samplename.unsorted.bam $path2sam/$current_samplename.sam");
-    #    unlink ("$path2sam/$current_samplename.sam") or die "Could not delete $current_samplename.sam file: <$!>\n"; # cleanup: delete samfile
 }
 
 sub sortbam {
@@ -1214,16 +1160,6 @@ sub indexbam {
 	print "\n\n*** Indexing $current_name file ***\n";
 	clock();
 	my $indexbam = system("samtools index $current_bam");
-}
-
-sub mark_dups {	
-	my ($current_sortedbam) = shift(@_);
-	my $current_name = substr $current_sortedbam, ($offset + 10), -11; # eg $input/tempBAMs/IO2.sorted.bam
-	print "\n\n*** Removing duplicate reads in $current_name bam file ***\n";
-	clock();
-	my $mark_dups = system("java -jar /home/groups/cardio/Applications/picard-tools-1.106/picard-tools-1.106/MarkDuplicates.jar INPUT=$current_sortedbam OUTPUT=$path2bam/$current_name.dedupp.bam METRICS_FILE=$path2log/$current_name.dedup.txt REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT");
-	
-    #~#    unlink($current_sortedbam) or die "Could not delete $current_sortedbam\n"; # delete the sorted bamfile, which has duplicates
 }
 
 sub realigner_target_creator {
