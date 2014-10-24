@@ -102,7 +102,7 @@ if (scalar(@f_fq) != scalar(@r_fq)) {
     die "*** error: There must be a 1.fastq.gz and 2.fastq.gz file for each sample\n\n";
 }
 
-my $eightfork_manager = Parallel::ForkManager->new(2);
+my $eightfork_manager = Parallel::ForkManager->new(3);
 
 for (my $i = 0; $i < @fq; $i = $i ++) {
     my @fq_pair = splice(@fq, $i, 2);
@@ -302,15 +302,29 @@ for (<ESP6500>) {
 close ESP6500;
 print STDERR "Done\n\n";
 
+# make a hash of ExAC variants
+print STDERR "Retrieving ExAC variation counts\n";
+open(ExAC, "/home/shared/NGS/human/richardb/Annotations/ExAC.r0.1.sites.snp.anno") or die "Can't open ExAC.anno: <$!>\n";
+my %ExAC_hash;
+for (<ExAC>) {
+    chomp;
+    my($exac_chr,$exac_pos,$exac_ref,$exac_alt,$exac_count)=split(/\t/); #splits the row into elements
+    my $ExAC_key="$exac_chr\t$exac_pos\t$exac_ref\t$exac_alt"; #puts chrom, position, ref and alt of anno file into one key
+    my $ExAC_value="$exac_count"; #puts allele count into value
+    $ExAC_hash{$ExAC_key} = $ExAC_value; #sets the key of the hash to the value
+}
+close ExAC;
+print STDERR "Done\n\n";
+
 # make a hash of 1KG variants
 print STDERR "Retrieving 1000 genomes allele frequencies\n";
-open(KG_2011, "/home/groups/cardio/References/Annotations/Exome_seq_pipeline/ALL_merged_plus50_phase1_v3_20101123_snps.anno") or die "Can't open 1KG.anno: <$!>\n";
+open(KG_2011, "/home/shared/NGS/human/richardb/Annotations/ALL.autosomes.phase3.snp.anno") or die "Can't open 1KG.anno: <$!>\n";
 my %KG2011_hash;
 for (<KG_2011>) {
     chomp;
-    my($kg_chr,$kg_pos,$kg_ref,$kg_alt,$kg_AFfreq,$kg_AMR,$kg_ASN,$kg_AFR,$kg_EUR)=split(/\t/); #splits the row into elements
+    my($kg_chr,$kg_pos,$kg_ref,$kg_alt,$kg_AFfreq,$kg_AMR,$kg_EAS,$kg_SAS,$kg_AFR,$kg_EUR)=split(/\t/); #splits the row into elements
     my $kg_key="$kg_chr\t$kg_pos\t$kg_ref\t$kg_alt"; #puts chr position ref and alt into one key
-    my $kg_value="$kg_AFfreq\t$kg_AMR\t$kg_ASN\t$kg_AFR\t$kg_EUR"; #puts frequences into value
+    my $kg_value="$kg_AFfreq\t$kg_AMR\t$kg_EAS\t$kg_SAS\t$kg_AFR\t$kg_EUR"; #puts frequences into value
     $KG2011_hash{$kg_key} = $kg_value; #sets the key of the hash to the value
 }
 close KG_2011;
@@ -502,7 +516,7 @@ my @genotype = split("/", $seattleline[5]); # split sample alleles that were obs
 if ($genotype[0] =~ m/$seattleline[3]/) {$alt = $genotype[1]} # if first observed allele matches the ref, the second observed allele is alt
 else  {$alt = $genotype[0]} # else alt is the first observed allele
 my $position = "$seattleline[1]\t$seattleline[2]\t$seattleline[3]"; # chromosome, position, reference base for ESP6500_snp
-my $full_position = "$seattleline[1]\t$seattleline[2]\t$seattleline[3]\t$alt"; # get chromosome, position, refbase and alt base for 1KG_2011 and cadd lookup
+my $full_position = "$seattleline[1]\t$seattleline[2]\t$seattleline[3]\t$alt"; # get chromosome, position, refbase and alt base for 1KG_2011, ExAC and cadd lookup
 my $chr_gene_tab = "$seattleline[1]\t$seattleline[21]\t"; # get chromosome and gene name and tab character for gene, heart, brain, aortic valve expression, omim lookup
 my $chr_pos_tab = "$seattleline[1]\t$seattleline[2]\t"; # get chromosome and gene name and tab character for clinvar and hgmd lookup
 my $chr_transcript_tab = "$seattleline[1]\t$seattleline[7]\t"; # get chromosome and transcript and tab character for strand
@@ -534,7 +548,7 @@ if (exists $ESP6500_hash{$position}) {push(@seattleline, "$ESP6500_hash{$positio
 else                       {push(@seattleline, "0\t0\t0")}
 # then annotate using 1KG_2011 hash
 if (exists $KG2011_hash{$full_position}) {push(@seattleline, "$KG2011_hash{$full_position}")}
-else                       {push(@seattleline, "0\t0\t0\t0\t0")}
+else                       {push(@seattleline, "0\t0\t0\t0\t0\t0")}
 # then annotate using gene_info hash
 if (exists $geneinfo_hash{$chr_gene_tab}) {push(@seattleline, "$geneinfo_hash{$chr_gene_tab}")}
 else                       {push(@seattleline, "NULL\tNULL")}
@@ -556,6 +570,9 @@ else                       {push(@seattleline, "NULL\tNULL")}
 # then annotate using hgmd hash
 if (exists $hgmd_hash{$chr_pos_tab}) {push(@seattleline, "$hgmd_hash{$chr_pos_tab}")}
 else                       {push(@seattleline, "NULL")}
+# then annotate using ExAC hash
+if (exists $ExAC_hash{$full_position}) {push(@seattleline, "$ExAC_hash{$full_position}")}
+else                       {push(@seattleline, "0")}
 # then annotate using rvis hash
 if (exists $rvis_hash{$gene_tab}) {push(@seattleline, "$rvis_hash{$gene_tab}")}
 else                       {push(@seattleline, "NULL\tNULL")}
@@ -754,9 +771,9 @@ print STDERR "Done\n\n";
 
 ########################## create final snp annotation file ################################
 print STDERR "Printing final annotation file\n";
-system("echo \"Chr\tNucleotide\tRef\tAlt\tAlamut\tSample_alleles\tGene\tGene_name\tGene_description\tHeart_fkpm\tAortic_valve_fkpm\tBrain_fkpm\tTranscript_ID\tStrand\tcDNA_variation\tDistance_to_splice\tFunctionGVS\tFunctionDBSNP\tAmino_acid\tGrantham\tProtein_residue\tProtein_domain\trs_ID\tESP6500_EA\tESP6500_AA\tESP6500_alleles\t1KG_AF\t1KG_AMR\t1KG_ASN\t1KG_AFR\t1KG_EUR\t46way_Phast\tGERP\tOMIM\tKEGG\tRVIS\tRVIS_percent\tCADD_score\tPolyPhen\tClinVar_ID\tClinVar_prediction\tHGMD_ID\tClinical_association\tMiRNA_site\tMiRNA_score\tQD\tMQ\tMQ0\tDepth_ave\tDepth_range\tAlt_count\tAlt_freq\tAllele_count\tSanger_sequenced\tSequenced_by\tDate\tComments\" > $input/$cohort/Variants/$cohort.annotated_snps.text");
+system("echo \"Chr\tNucleotide\tRef\tAlt\tAlamut\tSample_alleles\tGene\tGene_name\tGene_description\tHeart_fkpm\tAortic_valve_fkpm\tBrain_fkpm\tTranscript_ID\tStrand\tcDNA_variation\tDistance_to_splice\tFunctionGVS\tFunctionDBSNP\tAmino_acid\tGrantham\tProtein_residue\tProtein_domain\trs_ID\tESP6500_EA\tESP6500_AA\tESP6500_alleles\t1KG_AF\t1KG_AMR\t1KG_EAS\t1KG_SAS\t1KG_AFR\t1KG_EUR\tExAC_count\t46way_Phast\tGERP\tOMIM\tKEGG\tRVIS\tRVIS_percent\tCADD_score\tPolyPhen\tClinVar_ID\tClinVar_prediction\tHGMD_ID\tClinical_association\tMiRNA_site\tMiRNA_score\tQD\tMQ\tMQ0\tDepth_ave\tDepth_range\tAlt_count\tAlt_freq\tAllele_count\tSanger_sequenced\tSequenced_by\tDate\tComments\" > $input/$cohort/Variants/$cohort.annotated_snps.text");
 
-system("paste $input/final_anno $input/folds.txt $input/mirna_sites.txt| awk -v OFS=\"\t\" -F\"\t\" '{print\$2,\$3,\$4,\$60,\$61,\$6,\$22,\$47,\$48,\$49,\$50,\$51,\$8,\$59,\$58,\$31,\$9,\$10,\$62,\$16,\$13,\$68,\$11,\$40,\$41,\$36,\$42,\$43,\$44,\$45,\$46,\$17,\$18,\$52,\$33,\$56,\$57,\$19,\$15,\$53,\$54,\$55,\$30,\$69,\$70,\$63,\$64,\$65,\$66,\$67}' >> $input/$cohort/Variants/$cohort.annotated_snps.text");
+system("paste $input/final_anno $input/folds.txt $input/mirna_sites.txt| awk -v OFS=\"\t\" -F\"\t\" '{print\$2,\$3,\$4,\$62,\$63,\$6,\$22,\$48,\$49,\$50,\$51,\$52,\$8,\$61,\$60,\$31,\$9,\$10,\$64,\$16,\$13,\$70,\$11,\$40,\$41,\$36,\$42,\$43,\$44,\$45,\$46,\$47,\$57,\$17,\$18,\$53,\$33,\$58,\$59,\$19,\$15,\$54,\$55,\$56,\$30,\$71,\$72,\$65,\$66,\$67,\$68,\$69}' >> $input/$cohort/Variants/$cohort.annotated_snps.text");
 
 system("paste $input/$cohort/Variants/$cohort.annotated_snps.text $input/sample_genotypes $input/vcf_meta_file > $input/$cohort/Variants/$cohort.annotated_snps.txt");
 
@@ -819,13 +836,13 @@ print STDERR "Done\n\n";
 
 # make a hash of 1KG variants
 print STDERR "Collecting 1000 genomes phase1.b37 indel variation frequencies\n";
-open(KG_2011_indel, "/home/groups/cardio/References/Annotations/Exome_seq_pipeline/ALL_merged_plus50_phase1_v3_20101123_indels.anno") or die "Can't open 1KG_2011_indel.anno: <$!>\n";
+open(KG_2011_indel, "/home/shared/NGS/human/richardb/Annotations/ALL.autosomes.phase3.indel.anno") or die "Can't open 1KG_2011_indel.anno: <$!>\n";
 my %KG2011_indel_hash;
 for (<KG_2011_indel>) {
     chomp;
-    my($kgindel_chr,$kgindel_position,$kgindel_ref,$kgindel_alt,$kgindel_AFfreq,$kgindel_AMR,$kgindel_ASN,$kgindel_AFR,$kgindel_EUR)=split(/\t/); #splits the row into elements
+    my($kgindel_chr,$kgindel_position,$kgindel_ref,$kgindel_alt,$kgindel_AFfreq,$kgindel_AMR,$kgindel_EAS,$kgindel_SAS,$kgindel_AFR,$kgindel_EUR)=split(/\t/); #splits the row into elements
     my $kgindel_key="$kgindel_chr\t$kgindel_position\t$kgindel_ref\t$kgindel_alt"; #puts chr position and ref into one key
-    my $kgindel_value="$kgindel_AFfreq\t$kgindel_AMR\t$kgindel_ASN\t$kgindel_AFR\t$kgindel_EUR"; #puts freq into value
+    my $kgindel_value="$kgindel_AFfreq\t$kgindel_AMR\t$kgindel_EAS\t$kgindel_SAS\t$kgindel_AFR\t$kgindel_EUR"; #puts freq into value
     $KG2011_indel_hash{$kgindel_key} = $kgindel_value; #sets the key of the hash to the value
 }
 close KG_2011_indel;
@@ -857,6 +874,20 @@ for (<HGMD_INDEL>) {
     $hgmd_indel_hash{$hgmd_indel_key} = $hgmd_indel_value; #sets the key of the hash to the value
 }
 close HGMD_INDEL;
+print STDERR "Done\n\n";
+
+# make a hash of ExAC indel variants
+print STDERR "Retrieving ExAC indel variation counts\n";
+open(INDELExAC, "/home/shared/NGS/human/richardb/Annotations/ExAC.r0.1.sites.indel.anno") or die "Can't open ExAC.indel.anno: <$!>\n";
+my %indelExAC_hash;
+for (<INDELExAC>) {
+    chomp;
+    my($indelexac_chr,$indelexac_pos,$indelexac_ref,$indelexac_alt,$indelexac_count)=split(/\t/); #splits the row into elements
+    my $indelExAC_key="$indelexac_chr\t$indelexac_pos\t$indelexac_ref\t$indelexac_alt"; #puts chrom, position, ref and alt of anno file into one key
+    my $indelExAC_value="$indelexac_count"; #puts allele count into value
+    $indelExAC_hash{$indelExAC_key} = $indelExAC_value; #sets the key of the hash to the value
+}
+close INDELExAC;
 print STDERR "Done\n\n";
 
 # make indel vcf meta and full genotype hashes
@@ -1073,9 +1104,9 @@ print STDERR "Done\n\n";
 
 ########################## create final indel annotation file ################################
 
-system("echo \"Chr\tNucleotide\tRef\tAlt\tGene\tGene_name\tGene_description\tHeart_fkpm\tAortic_valve_fkpm\tBrain_fkpm\tTranscript_ID\tFunctionGVS\tFunctionDBSNP\trs_ID\tESP6500_EA\tESP6500_AA\tESP_All\t1KG_AF\t1KG_AMR\t1KG_ASN\t1KG_AFR\t1KG_EUR\t46way_Phast\tOMIM\tRVIS\tRVIS_percent\tClinvar_ID\tClinvar_prediction\tHGMD_ID\tKEGG_pathway\tProtein_domain\tMiRNA_site\tMiRNA_score\tQD\tMQ\tMQ0\tDP_ave\tDP_range\tAlt_count\tAlt_freq\tAllele_count\tSanger_sequenced\tSequenced_by\tDate\tComments\" > $input/$cohort/Variants/$cohort.annotated_indels.text");
+system("echo \"Chr\tNucleotide\tRef\tAlt\tGene\tGene_name\tGene_description\tHeart_fkpm\tAortic_valve_fkpm\tBrain_fkpm\tTranscript_ID\tFunctionGVS\tFunctionDBSNP\trs_ID\tESP6500_EA\tESP6500_AA\tESP_All\t1KG_AF\t1KG_AMR\t1KG_EAS\t1KG_SAS\t\t1KG_AFR\t1KG_EUR\tExAC_count\t46way_Phast\tOMIM\tRVIS\tRVIS_percent\tClinvar_ID\tClinvar_prediction\tHGMD_ID\tKEGG_pathway\tProtein_domain\tMiRNA_site\tMiRNA_score\tQD\tMQ\tMQ0\tDP_ave\tDP_range\tAlt_count\tAlt_freq\tAllele_count\tSanger_sequenced\tSequenced_by\tDate\tComments\" > $input/$cohort/Variants/$cohort.annotated_indels.text");
 
-system("paste $input/final_indel_anno $input/folds_indel.txt $input/mirna_indel_sites.txt | awk -v OFS=\"\t\" -F\"\t\" '{print\$2,\$3,\$4,\$6,\$21,\$46,\$47,\$48,\$49,\$50,\$8,\$9,\$10,\$11,\$38,\$39,\$40,\$41,\$42,\$43,\$44,\$45,\$17,\$51,\$55,\$56,\$52,\$53,\$54,\$32,\$62,\$63,\$64,\$57,\$58,\$59,\$60,\$61}' >> $input/$cohort/Variants/$cohort.annotated_indels.text");
+system("paste $input/final_indel_anno $input/folds_indel.txt $input/mirna_indel_sites.txt | awk -v OFS=\"\t\" -F\"\t\" '{print\$2,\$3,\$4,\$6,\$21,\$47,\$48,\$49,\$50,\$51,\$8,\$9,\$10,\$11,\$38,\$39,\$40,\$41,\$42,\$43,\$44,\$45,\$46,\$56,\$17,\$52,\$57,\$58,\$53,\$54,\$55,\$32,\$64,\$65,\$66,\$59,\$60,\$61,\$62,\$63}' >> $input/$cohort/Variants/$cohort.annotated_indels.text");
 
 
 system("paste $input/$cohort/Variants/$cohort.annotated_indels.text $input/sample_indel_genotypes $input/indelvcf_meta_file > $input/$cohort/Variants/$cohort.annotated.indels.txt");
